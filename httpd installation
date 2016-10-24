@@ -1,0 +1,81 @@
+-hosts: hostname.example.com
+ user: root
+
+vars: 
+
+httpd_welcome: '<html>
+<body>
+<h1>SRE CHALLENGE</h1>
+</body>
+</html>'
+
+Httpd_config: '
+<VirtualHost *:80>
+        <Directory /var/www/html/yoursite.com>
+        Options All Indexes FollowSymLinks
+        AllowOverride All
+        </Directory>
+        DocumentRoot /var/www/html
+        ServerName yoursite.com             ## Change with your servername.
+</VirtualHost>
+
+<VirtualHost *:443>
+        SSLEngine on
+        SSLCertificateFile /etc/pki/tls/certs/ca.crt
+        SSLCertificateKeyFile /etc/pki/tls/private/ca.key
+        <Directory /var/www/html/yoursite.com>
+        Options All Indexes FollowSymLinks
+        AllowOverride All
+        </Directory>
+        DocumentRoot /var/www/html/yoursite.com
+        ServerName yoursite.com              ## Change with your servername.
+</VirtualHost>'
+
+tasks:
+
+- name: install the latest version of Apache(httpd) and openssl
+ action: yum name=httpd mod_ssl openssl state=installed enabled=yes
+ action: yum name=httpd mod_ssl openssl state=latest
+
+- name: Generate private key
+- command: openssl genrsa -out ca.key 2048 
+
+- name: Generate CSR 
+- command: openssl req -new -key ca.key -out ca.csr
+
+- name: Generate Self Signed Key
+- command: openssl x509 -req -days 365 -in ca.csr -signkey ca.key -out ca.crt
+
+- name: Copy the files to the correct locations
+- command: cp ca.crt /etc/pki/tls/certs
+- command: cp ca.key /etc/pki/tls/private/ca.key
+- command: cp ca.csr /etc/pki/tls/private/ca.csr
+- command: restorecon -RvF /etc/pki
+
+- name: Modify SSL configuration on /etc/httpd/conf.d/ssl.conf 
+- lineinfile: dest=/etc/httpd/conf.d/ssl.conf  regexp=^SSLCertificateFile line=SSLCertificateFile /etc/pki/tls/certs/ca.crt
+- lineinfile: dest=/etc/httpd/conf.d/ssl.conf  regexp=^SSLCertificateKeyFile line=SSLCertificateKeyFile /etc/pki/tls/private/ca.key
+
+-name: Append and Modify /etc/httpd/conf/httpd.conf 
+ dest: /tmp/cont.txt
+ content: "{{Httpd_config}}"
+ command: cat /tmp/cont.txt  >> /etc/httpd/conf/httpd.conf
+ when: shell_out.std_out != ''
+
+-name: SRE CHALLENGE
+ dest: /var/www/html/index.html
+ content: "{{httpd_welcome}}" 
+
+- service: name=httpd state=restarted enabled=yes
+  when: httpd.changed
+  notify: restart httpd
+
+-name: Enable IP Tables on port 22, 80 and 443
+ command: iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+ command: iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+ command: iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+ command: /sbin/service iptables save
+ command: iptables -L -v
+
+
+
